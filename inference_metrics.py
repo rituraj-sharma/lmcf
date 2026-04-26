@@ -1,11 +1,11 @@
 """
-inference_metrics.py — GPU-required semantic metrics for LMCF project.
+inference_metrics.py — semantic metrics for LMCF project.
 Loads saved best-model checkpoints, generates 1000 samples per stage,
 then computes BERTScore and Concept Coverage.
 
-Run on GPU server after all training is complete:
+Run after all training is complete:
     python inference_metrics.py
-    LMCF_ROOT=/home/aizan/rituraj_lm python inference_metrics.py
+    LMCF_ROOT= /path/to/dir python inference_metrics.py
 
 Dependencies:
     pip install bert-score scikit-learn
@@ -33,20 +33,20 @@ os.environ["LMCF_ROOT"] = LMCF_ROOT
 
 PROJECT_ROOT = os.environ.get('LMCF_ROOT', os.path.expanduser('~/lmcf_project'))
 RESULTS_DIR  = os.path.join(PROJECT_ROOT, 'Results')
-CKPT_DIR     = os.path.join(PROJECT_ROOT, 'checkpoints')
-CACHE_DIR    = os.path.join(PROJECT_ROOT, 'dataset_cache')
+CKPT_DIR = os.path.join(PROJECT_ROOT, 'checkpoints')
+CACHE_DIR = os.path.join(PROJECT_ROOT, 'dataset_cache')
 
-MODELS      = ['M1', 'M2', 'M3']
+MODELS = ['M1', 'M2', 'M3']
 STAGE_LABELS = {
-    'E1': ['after_A',  'after_A_then_B'],
-    'E3': ['after_B',  'after_B_then_A'],
+    'E1': ['after_A', 'after_A_then_B'],
+    'E3': ['after_B', 'after_B_then_A'],
 }
 # E2 excluded — single stage, no S1 vs S2 comparison meaningful for BERTScore
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'Device   : {device}')
-print(f'Project  : {PROJECT_ROOT}')
-print(f'Results  : {RESULTS_DIR}')
+print(f'Device : {device}')
+print(f'Project : {PROJECT_ROOT}')
+print(f'Results : {RESULTS_DIR}')
 
 if device.type != 'cuda':
     print('\nWARNING: No GPU detected. Generation will be very slow.')
@@ -54,15 +54,15 @@ if device.type != 'cuda':
 
 
 # =============================================================================
-# SECTION 0 - CONFIG
+# CONFIG
 # =============================================================================
 
 N_SAMPLES_PER_DOMAIN = 500  # prompts per domain (500 A + 500 B = 1000 total)
-PROMPT_LEN           = 10   # tokens to use as prompt from val sequences
-GEN_LEN              = 40   # new tokens to generate per prompt
-TEMPERATURE          = 0.8
-TOP_K                = 50
-N_CONCEPTS           = 50   # top N TF-IDF words per domain
+PROMPT_LEN = 10   # tokens to use as prompt from val sequences
+GEN_LEN = 40   # new tokens to generate per prompt
+TEMPERATURE = 0.8
+TOP_K = 50
+N_CONCEPTS = 50   # top N TF-IDF words per domain
 
 MODEL_CONFIGS = {
     'M1': dict(n_layers=2,  d_model=128, n_heads=4,  dropout=0.1),
@@ -71,17 +71,17 @@ MODEL_CONFIGS = {
 }
 
 MAX_SEQ_LEN   = 128
-BATCH_SIZE    = 64   # generation batch size — reduce if OOM
+BATCH_SIZE    = 64 # generation batch size — reduce if OOM
 
 
 # =============================================================================
-# SECTION 1 - LOAD TOKENIZER
+# LOAD TOKENIZER
 # =============================================================================
 
 print('\n--- Loading tokenizer ---')
 
-VOCAB_FILE   = os.path.join(CACHE_DIR, 'bpe_vocab-vocab.json')
-MERGES_FILE  = os.path.join(CACHE_DIR, 'bpe_vocab-merges.txt')
+VOCAB_FILE = os.path.join(CACHE_DIR, 'bpe_vocab-vocab.json')
+MERGES_FILE = os.path.join(CACHE_DIR, 'bpe_vocab-merges.txt')
 
 if not os.path.exists(VOCAB_FILE):
     raise FileNotFoundError(
@@ -89,16 +89,16 @@ if not os.path.exists(VOCAB_FILE):
         f'Run train.py first to generate the tokenizer.'
     )
 
-tokenizer       = ByteLevelBPETokenizer(VOCAB_FILE, MERGES_FILE)
-PAD_IDX         = tokenizer.token_to_id('<pad>')
-BOS_IDX         = tokenizer.token_to_id('<bos>')
-EOS_IDX         = tokenizer.token_to_id('<eos>')
-ACTUAL_VOCAB    = tokenizer.get_vocab_size()
+tokenizer = ByteLevelBPETokenizer(VOCAB_FILE, MERGES_FILE)
+PAD_IDX = tokenizer.token_to_id('<pad>')
+BOS_IDX = tokenizer.token_to_id('<bos>')
+EOS_IDX = tokenizer.token_to_id('<eos>')
+ACTUAL_VOCAB = tokenizer.get_vocab_size()
 print(f'Vocab size: {ACTUAL_VOCAB}')
 
 
 # =============================================================================
-# SECTION 2 - MODEL DEFINITION (must match train.py exactly)
+# MODEL DEFINITION (must match train.py exactly)
 # =============================================================================
 
 import torch.nn as nn
@@ -110,7 +110,7 @@ class CausalSelfAttention(nn.Module):
         self.n_heads  = n_heads
         self.head_dim = d_model // n_heads
         self.dropout  = dropout
-        self.qkv      = nn.Linear(d_model, 3 * d_model, bias=False)
+        self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model,     bias=False)
 
     def forward(self, x):
@@ -131,7 +131,7 @@ class DecoderBlock(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.attn  = CausalSelfAttention(d_model, n_heads, dropout)
         self.norm2 = nn.LayerNorm(d_model)
-        self.ff    = nn.Sequential(
+        self.ff = nn.Sequential(
             nn.Linear(d_model, ff_dim), nn.GELU(), nn.Dropout(dropout),
             nn.Linear(ff_dim, d_model), nn.Dropout(dropout),
         )
@@ -144,22 +144,22 @@ class DecoderOnlyTransformerLM(nn.Module):
     def __init__(self, vocab_size, max_seq_len, d_model=256, n_heads=4,
                  n_layers=2, ff_dim=None, dropout=0.1):
         super().__init__()
-        ff_dim         = ff_dim or 4 * d_model
+        ff_dim = ff_dim or 4 * d_model
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(vocab_size, d_model)
-        self.pos_emb   = nn.Embedding(max_seq_len, d_model)
-        self.drop      = nn.Dropout(dropout)
-        self.blocks    = nn.ModuleList(
+        self.pos_emb = nn.Embedding(max_seq_len, d_model)
+        self.drop = nn.Dropout(dropout)
+        self.blocks = nn.ModuleList(
             [DecoderBlock(d_model, n_heads, ff_dim, dropout) for _ in range(n_layers)]
         )
-        self.norm    = nn.LayerNorm(d_model)
+        self.norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.token_emb.weight
 
     def forward(self, idx):
         B, T = idx.shape
         pos  = torch.arange(T, device=idx.device).unsqueeze(0)
-        x    = self.drop(self.token_emb(idx) + self.pos_emb(pos))
+        x = self.drop(self.token_emb(idx) + self.pos_emb(pos))
         for block in self.blocks:
             x = block(x)
         return self.lm_head(self.norm(x))
@@ -167,7 +167,7 @@ class DecoderOnlyTransformerLM(nn.Module):
     @torch.no_grad()
     def generate(self, idx, max_new_tokens=40, temperature=1.0, top_k=None):
         for _ in range(max_new_tokens):
-            idx_c  = idx[:, -self.max_seq_len:]
+            idx_c = idx[:, -self.max_seq_len:]
             logits = self(idx_c)[:, -1, :] / max(temperature, 1e-6)
             if top_k:
                 v, _ = torch.topk(logits, top_k)
@@ -185,8 +185,8 @@ def build_model(model_name):
 
 
 # =============================================================================
-# SECTION 3 - PREPARE PROMPTS FROM VAL SET
-# 1000 prompts drawn from A_val token stream.
+# PREPARE PROMPTS FROM VAL SET
+# 500 prompts drawn from each domain.
 # Each prompt = first PROMPT_LEN tokens of a val sequence.
 # Same prompt set used for ALL models and stages — ensures fair comparison.
 # =============================================================================
@@ -214,7 +214,7 @@ print(f'Domain A: {len(domain_a_texts):,} texts  (budget={budget_a:,})')
 print(f'Domain B: {len(domain_b_texts):,} texts  (budget={budget_b:,})')
 
 TRAIN_F = 0.70
-VAL_F   = 0.15
+VAL_F = 0.15
 
 def encode_texts(texts):
     ids = [BOS_IDX]
@@ -226,7 +226,7 @@ def encode_texts(texts):
 
 def extract_prompts(ids_val, n, label):
     """Extract n non-overlapping PROMPT_LEN-token prompts from val token stream."""
-    stride  = max(1, (len(ids_val) - PROMPT_LEN) // n)
+    stride = max(1, (len(ids_val) - PROMPT_LEN) // n)
     prompts = []
     for i in range(0, len(ids_val) - PROMPT_LEN, stride):
         prompts.append(ids_val[i : i + PROMPT_LEN])
@@ -237,23 +237,22 @@ def extract_prompts(ids_val, n, label):
 
 # Domain A val prompts
 print('Encoding Domain A val...')
-ids_a       = encode_texts(domain_a_texts)
-a_tr        = int(len(ids_a) * TRAIN_F)
-a_val_end   = int(len(ids_a) * (TRAIN_F + VAL_F))
-prompts_a   = extract_prompts(ids_a[a_tr:a_val_end], N_SAMPLES_PER_DOMAIN, 'Domain A')
+ids_a = encode_texts(domain_a_texts)
+a_tr = int(len(ids_a) * TRAIN_F)
+a_val_end = int(len(ids_a) * (TRAIN_F + VAL_F))
+prompts_a = extract_prompts(ids_a[a_tr:a_val_end], N_SAMPLES_PER_DOMAIN, 'Domain A')
 
 # Domain B val prompts
 print('Encoding Domain B val...')
-ids_b       = encode_texts(domain_b_texts)
-b_tr        = int(len(ids_b) * TRAIN_F)
-b_val_end   = int(len(ids_b) * (TRAIN_F + VAL_F))
-prompts_b   = extract_prompts(ids_b[b_tr:b_val_end], N_SAMPLES_PER_DOMAIN, 'Domain B')
+ids_b = encode_texts(domain_b_texts)
+b_tr = int(len(ids_b) * TRAIN_F)
+b_val_end = int(len(ids_b) * (TRAIN_F + VAL_F))
+prompts_b = extract_prompts(ids_b[b_tr:b_val_end], N_SAMPLES_PER_DOMAIN, 'Domain B')
 
 # Decode for JSON metadata — saved ONCE not per generation key
-# Kept separate by domain — no mixing, no position arithmetic needed
+# Kept separate by domain — no mixing
 def decode_prompts(prompt_list):
-    return [tokenizer.decode([i for i in p if i not in (BOS_IDX, PAD_IDX, EOS_IDX)])
-            for p in prompt_list]
+    return [tokenizer.decode([i for i in p if i not in (BOS_IDX, PAD_IDX, EOS_IDX)]) for p in prompt_list]
 
 prompt_texts_a = decode_prompts(prompts_a)
 prompt_texts_b = decode_prompts(prompts_b)
@@ -261,7 +260,7 @@ print(f'Total prompts: {len(prompts_a) + len(prompts_b)} ({len(prompts_a)} A + {
 
 
 # =============================================================================
-# SECTION 4 - GENERATION LOOP
+# GENERATION LOOP
 # For each (model, experiment, stage): load best checkpoint, generate 1000 texts.
 # Uses batched generation for speed.
 # Results saved to inference_generations.json as they are produced.
@@ -282,31 +281,28 @@ else:
 # Save prompts ONCE in metadata key — separate A and B, self-documenting
 if '_prompts' not in all_generations:
     all_generations['_prompts'] = {
-        'A':         prompt_texts_a,   # decoded A-domain prompt texts
-        'B':         prompt_texts_b,   # decoded B-domain prompt texts
-        'n_a':       len(prompts_a),
-        'n_b':       len(prompts_b),
+        'A': prompt_texts_a,   # decoded A-domain prompt texts
+        'B': prompt_texts_b,   # decoded B-domain prompt texts
+        'n_a': len(prompts_a),
+        'n_b': len(prompts_b),
         'prompt_len': PROMPT_LEN,
-        'gen_len':    GEN_LEN,
+        'gen_len': GEN_LEN,
     }
 
-
-def generate_batch(model, prompt_ids_list, max_new=GEN_LEN,
-                   temperature=TEMPERATURE, top_k=TOP_K):
+def generate_batch(model, prompt_ids_list, max_new=GEN_LEN, temperature=TEMPERATURE, top_k=TOP_K):
     """
     Generate continuations for a list of token-id prompts.
     Pads prompts to same length within batch.
     Returns list of decoded strings.
     """
     model.eval()
-    max_len  = max(len(p) for p in prompt_ids_list)
+    max_len = max(len(p) for p in prompt_ids_list)
     # Pad left with PAD_IDX so all sequences end at the same position
-    padded   = [[PAD_IDX] * (max_len - len(p)) + list(p) for p in prompt_ids_list]
-    idx      = torch.tensor(padded, dtype=torch.long, device=device)
+    padded = [[PAD_IDX] * (max_len - len(p)) + list(p) for p in prompt_ids_list]
+    idx = torch.tensor(padded, dtype=torch.long, device=device)
 
     with torch.no_grad():
-        out = model.generate(idx, max_new_tokens=max_new,
-                             temperature=temperature, top_k=top_k)
+        out = model.generate(idx, max_new_tokens=max_new, temperature=temperature, top_k=top_k)
 
     results = []
     for seq in out:
@@ -333,7 +329,7 @@ for model_name in MODELS:
 
             print(f'\n  {gen_key}: loading checkpoint...')
             model = build_model(model_name)
-            ckpt  = torch.load(ckpt_path, map_location=device)
+            ckpt = torch.load(ckpt_path, map_location=device)
             model.load_state_dict(ckpt['model_state'])
             model.eval()
             n_total = len(prompts_a) + len(prompts_b)
@@ -354,13 +350,13 @@ for model_name in MODELS:
             outputs_b = run_generation(prompts_b, 'B-prompts')
 
             all_generations[gen_key] = {
-                'model':      model_name,
+                'model': model_name,
                 'experiment': exp_key,
-                'stage':      lbl,
-                'n_a':        len(outputs_a),
-                'n_b':        len(outputs_b),
-                'outputs_A':  outputs_a,   # continuations of A-domain prompts
-                'outputs_B':  outputs_b,   # continuations of B-domain prompts
+                'stage': lbl,
+                'n_a': len(outputs_a),
+                'n_b': len(outputs_b),
+                'outputs_A': outputs_a,   # continuations of A-domain prompts
+                'outputs_B': outputs_b,   # continuations of B-domain prompts
             }
 
             # Save after each stage — survives interruption
@@ -377,7 +373,7 @@ print(f'\nAll generations complete. Keys: {list(all_generations.keys())}')
 
 
 # =============================================================================
-# SECTION 5 - CONCEPT COVERAGE
+# CONCEPT COVERAGE
 # TF-IDF differential to extract domain-characteristic words.
 # Measures what fraction of domain-specific concepts appear in generated text.
 # Data-driven — no manual word lists needed.
@@ -401,8 +397,8 @@ try:
     print('\nExtracting domain concepts via TF-IDF...')
     vectorizer = TfidfVectorizer(
         max_features = 10_000,
-        stop_words   = 'english',
-        ngram_range  = (1, 1),
+        stop_words = 'english',
+        ngram_range = (1, 1),
     )
     sample_a = domain_a_texts[:2000]
     sample_b = domain_b_texts[:2000]
@@ -410,8 +406,8 @@ try:
 
     a_scores = vectorizer.transform(sample_a).mean(axis=0).A1
     b_scores = vectorizer.transform(sample_b).mean(axis=0).A1
-    vocab    = vectorizer.get_feature_names_out()
-    diff     = a_scores - b_scores
+    vocab = vectorizer.get_feature_names_out()
+    diff = a_scores - b_scores
 
     domain_a_concepts = set(vocab[diff.argsort()[-N_CONCEPTS:]])
     domain_b_concepts = set(vocab[(-diff).argsort()[-N_CONCEPTS:]])
@@ -439,11 +435,11 @@ try:
         cov_b_on_b = concept_coverage(outs_b, domain_b_concepts)
 
         cc_rows.append({
-            'model':             gen_data['model'],
-            'experiment':        gen_data['experiment'],
-            'stage':             gen_data['stage'],
-            'n_a':               gen_data['n_a'],
-            'n_b':               gen_data['n_b'],
+            'model': gen_data['model'],
+            'experiment': gen_data['experiment'],
+            'stage': gen_data['stage'],
+            'n_a': gen_data['n_a'],
+            'n_b': gen_data['n_b'],
             'cov_a_on_Aprompts': cov_a_on_a,  # high in S1, drops in S2 = A forgetting
             'cov_b_on_Aprompts': cov_b_on_a,  # rises in S2 = domain drift to B
             'cov_a_on_Bprompts': cov_a_on_b,  # should stay low
@@ -454,7 +450,7 @@ try:
         print(f'    B-prompts -> cov_A={cov_a_on_b:.3f}  cov_B={cov_b_on_b:.3f}')
 
     if cc_rows:
-        cc_df   = pd.DataFrame(cc_rows)
+        cc_df = pd.DataFrame(cc_rows)
         cc_path = os.path.join(RESULTS_DIR, 'concept_coverage.csv')
         cc_df.to_csv(cc_path, index=False)
         print(f'\nSaved -> {cc_path}')
@@ -544,29 +540,29 @@ try:
                 mean_r  = float(R.mean())
                 std_f1  = float(F1.std())
 
-                if   mean_f1 > 0.85: interp = 'low semantic drift'
+                if mean_f1 > 0.85: interp = 'low semantic drift'
                 elif mean_f1 > 0.70: interp = 'moderate semantic drift'
-                else:                interp = 'HIGH semantic drift - strong forgetting'
+                else: interp = 'HIGH semantic drift - strong forgetting'
 
                 print(f'    F1={mean_f1:.4f} +/- {std_f1:.4f}  '
                       f'P={mean_p:.4f}  R={mean_r:.4f}  [{interp}]')
 
                 bs_rows.append({
-                    'model':          model_name,
-                    'experiment':     exp_key,
-                    'stage1':         lbl1,
-                    'stage2':         lbl2,
-                    'prompt_type':    prompt_type,  # A-prompts or B-prompts
-                    'n_samples':      len(r_slice),
-                    'bertscore_P':    round(mean_p,  4),
-                    'bertscore_R':    round(mean_r,  4),
-                    'bertscore_F1':   round(mean_f1, 4),
-                    'bertscore_std':  round(std_f1,  4),
+                    'model': model_name,
+                    'experiment': exp_key,
+                    'stage1': lbl1,
+                    'stage2': lbl2,
+                    'prompt_type': prompt_type,  # A-prompts or B-prompts
+                    'n_samples': len(r_slice),
+                    'bertscore_P': round(mean_p,  4),
+                    'bertscore_R': round(mean_r,  4),
+                    'bertscore_F1': round(mean_f1, 4),
+                    'bertscore_std': round(std_f1,  4),
                     'interpretation': interp,
                 })
 
     if bs_rows:
-        bs_df   = pd.DataFrame(bs_rows)
+        bs_df = pd.DataFrame(bs_rows)
         bs_path = os.path.join(RESULTS_DIR, 'bertscore.csv')
         bs_df.to_csv(bs_path, index=False)
         print(f'\nSaved -> {bs_path}')
