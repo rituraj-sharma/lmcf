@@ -1,5 +1,5 @@
 """
-inference_metrics.py — semantic metrics for LMCF project.
+inference_metrics.py — semantic metrics.
 Loads saved best-model checkpoints, generates 1000 samples per stage,
 then computes BERTScore and Concept Coverage.
 

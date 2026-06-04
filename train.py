@@ -64,34 +64,34 @@ MODELS_TO_RUN = [
     'M3',
 ]
 EXPERIMENTS_TO_RUN = [
-    'E1',   # A → B
+    'E1',   # A -> B
     'E2', # Mixed
-    'E3', # B → A
+    'E3', # B -> A
 ]
 
 # ── Tokenizer / data ──────────────────────────────────────────────────────────
-VOCAB_SIZE             = 8000   # fixed across all scales
-MAX_SEQ_LEN            = 128
-BATCH_SIZE             = 256
-TOKENS_BUDGET_PER_DOMAIN = 2_000_000
-NUM_WORKERS            = min(4, os.cpu_count() or 1)
-RANDOM_SEED            = 42
+VOCAB_SIZE = 8000  # fixed across all scales (90% of corpus covered by ~8000 unique tokens)
+MAX_SEQ_LEN = 128
+BATCH_SIZE = 256
+TOKENS_BUDGET_PER_DOMAIN = 6_000_000 # {M1: 2M, M2: 4M, M3: 6M}
+NUM_WORKERS = min(4, os.cpu_count() or 1)
+RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
 # ── Training ──────────────────────────────────────────────────────────────────
-MAX_STEPS_PER_STAGE = {'M1': 5_000,   'M2': 5_000, 'M3': 5_000} # fixed across all scales
-EVAL_EVERY          = 200           # val PPL every N steps
-LOG_EVERY           = 50            # train loss print every N steps (cheap)
+MAX_STEPS_PER_STAGE = {'M1': 5_000,   'M2': 5_000, 'M3': 5_000} # fixed across all scales 
+EVAL_EVERY = 200           # val PPL every N steps
+LOG_EVERY = 50            # train loss print every N steps (cheap)
 EARLY_STOP_PATIENCE = 5             # eval intervals without improvement
 TRACK_FORGETTING_PPL = True         # set False for ~10% speed-up
-VAL_BATCHES_TRAIN    = 10           # max batches during in-training eval (None = full val set)
+VAL_BATCHES_TRAIN = 10           # max batches during in-training eval (None = full val set)
                                     # full val set used at stage boundary only
 
 # ── Model configs (architecture + per-model LR and dropout) ───────────────────
 MODEL_CONFIGS = {
-    'M1': dict(n_layers=2,  d_model=128, n_heads=4,  lr=3e-4, dropout=0.1),
-    'M2': dict(n_layers=6,  d_model=256, n_heads=8,  lr=2e-4, dropout=0.1),
-    'M3': dict(n_layers=12, d_model=384, n_heads=12, lr=1e-4, dropout=0.1),
+    'M1': dict(n_layers=2,  d_model=128, n_heads=4,  lr=3e-4, dropout=0.1), #(~1.5M)
+    'M2': dict(n_layers=6,  d_model=256, n_heads=8,  lr=2e-4, dropout=0.1), #(~7M)
+    'M3': dict(n_layers=12, d_model=384, n_heads=12, lr=1e-4, dropout=0.1), #(~24M)
 }
 
 # Stage1 and Stage2
@@ -121,6 +121,8 @@ print(f'Total runs  : {len(MODELS_TO_RUN) * len(EXPERIMENTS_TO_RUN)}')
 
 # Pretrained toeknization is omly used for budget estimation
 # For training BPE tokenization is learned from scratch
+# AG News = 6.12M Tokens
+# TinyStories = 2M texts
 _temp_tok = AutoTokenizer.from_pretrained('gpt2')
 
 def count_tokens(text: str) -> int:
@@ -132,7 +134,7 @@ def stream_domain_A(seed: int = 42):
     ds = load_dataset('roneneldan/TinyStories', split='train', streaming=True)
     return ds.shuffle(buffer_size=50_000, seed=seed).skip(5_000)
 
-# AG News dataset download
+# AG News dataset download 
 def load_domain_B(seed: int = 42) -> list:
     ds = load_dataset('fancyzhx/ag_news', split='train')
     texts = [row['text'] for row in ds]
@@ -141,6 +143,7 @@ def load_domain_B(seed: int = 42) -> list:
     return texts
 
 # Collect estimated token
+# Collects TinyStories
 def _sample_stream(dataset, budget: int) -> tuple:
     collected, total = [], 0
     for row in dataset:
@@ -154,6 +157,7 @@ def _sample_stream(dataset, budget: int) -> tuple:
             break
     return collected, total
 
+# Collects AG News
 def _sample_list(texts: list, budget: int) -> tuple:
     collected, total = [], 0
     for text in texts:
@@ -177,9 +181,9 @@ def load_or_cache(domain: str, budget: int) -> tuple:
 
     print(f'[Domain {domain}] downloading...')
     if domain == 'A':
-        texts, n = _sample_stream(stream_domain_A(RANDOM_SEED), budget)
-    elif domain == 'B':
-        texts, n = _sample_list(load_domain_B(RANDOM_SEED), budget)
+        texts, n = _sample_stream(stream_domain_A(RANDOM_SEED), budget) # TinyStories
+    elif domain == 'B': 
+        texts, n = _sample_list(load_domain_B(RANDOM_SEED), budget) # AG News
     else:
         raise ValueError(domain)
 
@@ -192,6 +196,7 @@ def load_or_cache(domain: str, budget: int) -> tuple:
 print('\n--- Loading data ---')
 domain_a_texts, tokens_a = load_or_cache('A', TOKENS_BUDGET_PER_DOMAIN)
 domain_b_texts, tokens_b = load_or_cache('B', TOKENS_BUDGET_PER_DOMAIN)
+# ratio of two corpora size, 1: perfectly balanced
 print(f'Balance ratio: {min(tokens_a, tokens_b) / max(tokens_a, tokens_b):.3f}')
 
 
@@ -214,7 +219,7 @@ else:
     tokenizer.train_from_iterator(
         iter(domain_a_texts + domain_b_texts),
         vocab_size = VOCAB_SIZE,
-        min_frequency = 2,
+        min_frequency = 2, # merges if atleast 2 pairs exists, low (1): merges every pair -> more noise, high(5): less merges -> more <unk> at inference, very high: character level
         special_tokens = ['<pad>', '<unk>', '<bos>', '<eos>'],
     )
     tokenizer.save_model(DRIVE_CACHE, 'bpe_vocab')
@@ -245,8 +250,8 @@ class NextTokenDataset(Dataset):
     def __len__(self):
         return max(0, len(self.ids) - MAX_SEQ_LEN)
     def __getitem__(self, idx):
-        x = torch.tensor(self.ids[idx          : idx + MAX_SEQ_LEN    ], dtype=torch.long)
-        y = torch.tensor(self.ids[idx + 1      : idx + MAX_SEQ_LEN + 1], dtype=torch.long)
+        x = torch.tensor(self.ids[idx : idx + MAX_SEQ_LEN], dtype=torch.long) # len = MAX_SEQ_LEN  
+        y = torch.tensor(self.ids[idx + 1 : idx + MAX_SEQ_LEN + 1], dtype=torch.long) # offset by 1, len = MAX_SEQ_LEN
         return x, y
 
 def make_loader(token_ids: list, shuffle: bool) -> DataLoader:
@@ -254,10 +259,10 @@ def make_loader(token_ids: list, shuffle: bool) -> DataLoader:
         NextTokenDataset(token_ids),
         batch_size = BATCH_SIZE,
         shuffle = shuffle,
-        drop_last = True,
+        drop_last = True, # if the last batch is not eaqual to BATCH SIZE, then it drops that batch
         num_workers = NUM_WORKERS,
-        pin_memory = True,
-        persistent_workers = NUM_WORKERS > 0,
+        pin_memory = True, # keep the cpu tensors locked (useful for GPU training)
+        persistent_workers = NUM_WORKERS > 0, # keeps the worker processes alive 
     )
 
 print('\n--- Encoding and splitting ---')
@@ -271,8 +276,8 @@ print(f'Encoded in {time.time()-t0:.1f}s  |  A:{len(ids_a):,}  B:{len(ids_b):,} 
 TRAIN_F = 0.70
 VAL_F = 0.15
 
-sa_tr = int(len(ids_a) * TRAIN_F);  sa_v = int(len(ids_a) * (TRAIN_F + VAL_F))
-sb_tr = int(len(ids_b) * TRAIN_F);  sb_v = int(len(ids_b) * (TRAIN_F + VAL_F))
+sa_tr = int(len(ids_a) * TRAIN_F); sa_v = int(len(ids_a) * (TRAIN_F + VAL_F))
+sb_tr = int(len(ids_b) * TRAIN_F); sb_v = int(len(ids_b) * (TRAIN_F + VAL_F))
 
 ids_a_train, ids_a_val, ids_a_test = ids_a[:sa_tr], ids_a[sa_tr:sa_v], ids_a[sa_v:]
 ids_b_train, ids_b_val, ids_b_test = ids_b[:sb_tr], ids_b[sb_tr:sb_v], ids_b[sb_v:]
@@ -302,19 +307,24 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = d_model // n_heads
         self.dropout  = dropout
         self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
-        self.out_proj = nn.Linear(d_model, d_model,     bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, C = x.shape
-        q, k, v = self.qkv(x).chunk(3, dim=-1)
-        def split(t): return t.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        q, k, v = split(q), split(k), split(v)
+        B, T, C = x.shape # (BATCH_SIZE, MAX_SEQ_LEN, d_model)
+        q, k, v = self.qkv(x).chunk(3, dim=-1) # each (B, T, C)
+        def split(t): return t.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) # view: (B, T, n_heads, head_dim) -> Transpose: (B, T, head_dim, n_heads)
+        q, k, v = split(q), split(k), split(v) # each (B, T, head_dim, n_heads)
         out = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p = self.dropout if self.training else 0.0,
             is_causal = True,
         )
-        return self.out_proj(out.transpose(1, 2).contiguous().view(B, T, C))
+        # out -> (B, T, head_dim, n_heads)
+        # tensor's memory is non-contiguous after transpose() but view() requires contiguous in memory. So contiguous() make the bytes contiguous in memory
+        # Each attention head independently computes its own attention output. 
+        # After concatenating all heads, independent attention outputs have never talked to each other.
+        # The projection layer mixes them together.
+        return self.out_proj(out.transpose(1, 2).contiguous().view(B, T, C)) # Transpose: (B, T, n_heads, head_dim) -> view: (B, T, C)
 
 class DecoderBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int, ff_dim: int, dropout: float):
@@ -327,6 +337,7 @@ class DecoderBlock(nn.Module):
             nn.Linear(ff_dim, d_model), nn.Dropout(dropout),
         )
     def forward(self, x):
+        # Pre-LN (Training stability, less sensitive to LR warmup, Easier to train from scratch)
         x = x + self.attn(self.norm1(x))
         x = x + self.ff(self.norm2(x))
         return x
@@ -339,7 +350,7 @@ class DecoderOnlyTransformerLM(nn.Module):
         self.ff_dim = ff_dim
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(vocab_size, d_model)
-        self.pos_emb = nn.Embedding(max_seq_len, d_model)
+        self.pos_emb = nn.Embedding(max_seq_len, d_model) # Learnable PE (more expressive)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(
             [DecoderBlock(d_model, n_heads, ff_dim, dropout) for _ in range(n_layers)]
@@ -347,9 +358,10 @@ class DecoderOnlyTransformerLM(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.token_emb.weight
+        # xavier weight initialization (good for linear or tanh or GELU)
         for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+            if p.dim() > 1: # only mattrices weight (excludes bias, LayerNorms)
+                nn.init.xavier_uniform_(p) # sqrt(6/(fan_in + fan_out)), fan_in = input, fan_out = output from the layer
 
     def forward(self, idx):
         B, T = idx.shape
@@ -365,13 +377,15 @@ class DecoderOnlyTransformerLM(nn.Module):
     @torch.no_grad()
     def generate(self, idx, max_new_tokens=50, temperature=1.0, top_k=None):
         for _ in range(max_new_tokens):
-            idx_c  = idx[:, -self.max_seq_len:]
-            logits = self(idx_c)[:, -1, :] / max(temperature, 1e-6)
+            idx_c  = idx[:, -self.max_seq_len:] # if > max_seq_len, take only last max_seq_len
+            logits = self(idx_c)[:, -1, :] / max(temperature, 1e-6) # teperature controls sharpness of softmax, 1>: sharper, <1: flatter
             if top_k:
-                v, _ = torch.topk(logits, top_k)
+                v, _ = torch.topk(logits, top_k) # keep only top-k tokens (prevents sampling of low-probability tokens)
                 logits[logits < v[:, [-1]]] = float('-inf')
-            nxt = torch.multinomial(F.softmax(logits, dim=-1), 1)
-            if nxt.item() == EOS_IDX:
+            nxt = torch.multinomial(F.softmax(logits, dim=-1), 1) # filtered logits to probability, 
+            # Multimodal: Stochastic sampling (not greedy): 
+            # Stochastic helps to learn different words as next token instead of one correct words (avoids repetition, gives diversity)
+            if nxt.item() == EOS_IDX: # end of sentence
                 break
             idx = torch.cat([idx, nxt], dim=1)
         return idx
@@ -436,7 +450,7 @@ def train_stage(model, loader, val_loader, max_steps=1000, stage_name='',
         p = (step - warmup_steps) / max(1, max_steps - warmup_steps)
         return (lr_min + 0.5 * (1 + math.cos(math.pi * p)) * (lr - lr_min)) / lr
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1) #why?
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
 
@@ -461,7 +475,7 @@ def train_stage(model, loader, val_loader, max_steps=1000, stage_name='',
 
         with torch.autocast(device_type=device.type, dtype=torch.float16,
                             enabled=(device.type == 'cuda')):
-            loss = F.cross_entropy(model(x).view(-1, ACTUAL_VOCAB_SIZE), y.view(-1))
+            loss = F.cross_entropy(model(x).view(-1, ACTUAL_VOCAB_SIZE), y.view(-1)) # Why Autocast
 
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
